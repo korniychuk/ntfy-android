@@ -9,9 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       base_override:
-        description: 'Pretend the recorded base is this tag (e.g. v1.25.1) — for testing the flow'
+        description: 'Pretend the recorded base is this tag (e.g. v1.24.0) — for testing the flow'
         required: false
         default: ''
+      source_branch:
+        description: 'Branch to rebase (default ankor). For a faithful test, point it at a branch that really sits on base_override, e.g. v1.24.0 + the fork commits'
+        required: false
+        default: 'ankor'
 
 permissions:
   contents: write
@@ -27,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ankor
+          ref: ${{ github.event.inputs.source_branch || 'ankor' }}
           fetch-depth: 0
 
       - name: Resolve recorded base and latest upstream release
@@ -84,7 +88,7 @@ jobs:
           git config user.email "upstream-watch@users.noreply.github.com"
           git remote add upstream "$UPSTREAM_REPO"
           git fetch --no-tags upstream "refs/tags/$base:refs/tags/$base" "refs/tags/$latest:refs/tags/$latest"
-          git checkout -B "rebase/$latest" ankor
+          git checkout -B "rebase/$latest" "${{ github.event.inputs.source_branch || 'ankor' }}"
           if git rebase --onto "$latest" "$base" "rebase/$latest" > rebase.log 2>&1; then
             printf '%s\n' "$latest" > UPSTREAM_BASE
             git commit -qm "chore: rebase onto $latest" -- UPSTREAM_BASE
@@ -137,6 +141,8 @@ jobs:
             kind="build failure"; log=$(tail -80 build.log)
             git push --force origin "rebase/$latest" || true
           fi
-          gh issue create --title "rebase onto $latest: $kind" \
-            --body "$(printf 'Upstream released %s (recorded base: %s). The automated rebase hit a %s and needs a human.\n\nRun: %s/%s/actions/runs/%s\n\n```\n%s\n```' \
-              "$latest" "${{ steps.versions.outputs.base }}" "$kind" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$log")"
+          body=$(printf 'Upstream released %s (recorded base: %s). The automated rebase hit a %s and needs a human.\n\nRun: %s/%s/actions/runs/%s\n\n```\n%s\n```' \
+            "$latest" "${{ steps.versions.outputs.base }}" "$kind" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$log")
+          # REST rather than `gh issue create`: the GraphQL createIssue mutation answers
+          # "Resource not accessible by integration" for GITHUB_TOKEN on this (forked) repo
+          gh api -X POST "repos/$GITHUB_REPOSITORY/issues" -f title="rebase onto $latest: $kind" -f body="$body" --jq .html_url
