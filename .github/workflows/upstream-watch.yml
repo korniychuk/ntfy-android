@@ -91,7 +91,7 @@ jobs:
           git checkout -B "rebase/$latest" "${{ github.event.inputs.source_branch || 'ankor' }}"
           if git rebase --onto "$latest" "$base" "rebase/$latest" > rebase.log 2>&1; then
             printf '%s\n' "$latest" > UPSTREAM_BASE
-            git commit -qm "chore: rebase onto $latest" -- UPSTREAM_BASE
+            git diff --quiet -- UPSTREAM_BASE || git commit -qm "chore: rebase onto $latest" -- UPSTREAM_BASE
             echo "result=clean" >> "$GITHUB_OUTPUT"
           else
             git diff --name-only --diff-filter=U >> rebase.log || true
