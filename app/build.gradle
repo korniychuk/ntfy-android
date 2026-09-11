@@ -147,3 +147,13 @@ dependencies {
     implementation "pl.droidsonroids.gif:android-gif-drawable:1.2.31"
     implementation "com.caverock:androidsvg:1.4"
 }
+
+// ---- AnKor fork (github.com/korniychuk/ntfy-android, branch ankor) -------------------------
+// One block at the end of the file so the patch series rebases cleanly onto upstream releases
+// (upstream bumps versionCode/versionName above on every release; we derive ours from them).
+// Only the applicationId is renamed; the namespace and the Kotlin packages stay io.heckel.ntfy.
+// Bump ankorRelease for every fork release; the release tag is "v" + versionName.
+def ankorRelease = 1
+android.defaultConfig.applicationId = "pro.korniychuk.ntfy"
+android.defaultConfig.versionName = "${android.defaultConfig.versionName}-ankor.${ankorRelease}"
+android.defaultConfig.versionCode = android.defaultConfig.versionCode * 100 + ankorRelease

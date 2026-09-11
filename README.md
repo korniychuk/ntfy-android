@@ -1,3 +1,12 @@
+# ntfy Android App — AnKor fork
+
+> **This is a personal fork** of [binwiederhier/ntfy-android](https://github.com/binwiederhier/ntfy-android)
+> (branch `ankor`), rebuilt as `pro.korniychuk.ntfy` against a private Firebase project so that
+> a self-hosted ntfy server gets native FCM push instead of a foreground-service WebSocket.
+> It is not published to any store; APKs are attached to this repo's GitHub Releases.
+> The patch series on top of the upstream release tag is intentionally tiny (rename, base URL,
+> a silent canary topic, CI). Everything else is upstream — please report app bugs there.
+
 # ntfy Android App
 This is the Android app for [ntfy](https://github.com/binwiederhier/ntfy) ([ntfy.sh](https://ntfy.sh)). You can find the app in [F-Droid](https://f-droid.org/packages/io.heckel.ntfy/) or the [Play Store](https://play.google.com/store/apps/details?id=io.heckel.ntfy), 
 or as .apk files on the [GitHub releases page](https://github.com/binwiederhier/ntfy-android/releases).
