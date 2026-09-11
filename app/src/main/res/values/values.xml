@@ -5,7 +5,7 @@
 
     <!-- Main app constants -->
     <string name="app_name" translatable="false">ntfy (AnKor)</string>
-    <string name="app_base_url" translatable="false">https://ntfy.sh</string> <!-- If changed, you must also change google-services.json! -->
+    <string name="app_base_url" translatable="false">https://ntfy.korniychuk.pro</string> <!-- AnKor fork: the FCM code keys off this. If changed, you must also change google-services.json! -->
 
     <!-- Main activity -->
     <string name="main_menu_report_bug_url" translatable="false">https://github.com/binwiederhier/ntfy/issues</string>
