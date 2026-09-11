@@ -157,3 +157,6 @@ def ankorRelease = 1
 android.defaultConfig.applicationId = "pro.korniychuk.ntfy"
 android.defaultConfig.versionName = "${android.defaultConfig.versionName}-ankor.${ankorRelease}"
 android.defaultConfig.versionCode = android.defaultConfig.versionCode * 100 + ankorRelease
+// healthchecks.io ping key for the silent canary topic (see CanaryService). Injected by CI from
+// a secret; an empty key disables the canary and the app behaves exactly like upstream.
+android.defaultConfig.buildConfigField 'String', 'HC_PING_KEY', "\"${System.getenv('HC_PING_KEY') ?: ''}\""
