@@ -162,3 +162,6 @@ android.defaultConfig.versionCode = android.defaultConfig.versionCode * 100 + an
 // without it the build behaves exactly like upstream (ntfy.sh). Must match google-services.json.
 android.buildFeatures.resValues = true
 android.defaultConfig.resValue 'string', 'app_base_url', System.getenv('NTFY_BASE_URL') ?: 'https://ntfy.sh'
+// healthchecks.io ping key for the silent canary topic (see CanaryService). Injected by CI from
+// a secret; an empty key disables the canary and the app behaves exactly like upstream.
+android.defaultConfig.buildConfigField 'String', 'HC_PING_KEY', "\"${System.getenv('HC_PING_KEY') ?: ''}\""

@@ -17,6 +17,7 @@ class NotificationDispatcher(val context: Context, val repository: Repository) {
     private val notifier = NotificationService(context)
     private val broadcaster = BroadcastService(context)
     private val distributor = Distributor(context)
+    private val canary = CanaryService(context) // AnKor fork
 
     fun init() {
         notifier.createDefaultNotificationChannels()
@@ -24,6 +25,12 @@ class NotificationDispatcher(val context: Context, val repository: Repository) {
 
     fun dispatch(subscription: Subscription, notification: Notification) {
         Log.d(TAG, "Dispatching $notification for subscription $subscription")
+
+        // AnKor fork: canary messages are a liveness probe, not something to show
+        if (canary.handles(subscription, notification)) {
+            canary.ping(notification)
+            return
+        }
 
         val cancel = shouldCancel(notification)
         val muted = getMuted(subscription)
