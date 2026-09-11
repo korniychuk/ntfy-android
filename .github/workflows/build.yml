@@ -1,0 +1,42 @@
+# AnKor fork: sanity build of the play/debug variant on every push and PR to `ankor`.
+name: build
+
+on:
+  push:
+    branches: [ankor]
+  pull_request:
+    branches: [ankor]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Write google-services.json from secret
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON_B64" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON_B64 secret is missing (forks/PRs from other repos have no secrets)"
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
+
+      - name: Build play/debug
+        run: ./gradlew --no-daemon assemblePlayDebug
+
+      - name: Remove google-services.json
+        if: always()
+        run: shred -u -n 1 app/google-services.json 2>/dev/null || true

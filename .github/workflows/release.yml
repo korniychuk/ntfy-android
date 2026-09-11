@@ -1,0 +1,114 @@
+# AnKor fork: on tag v<upstream>-ankor.<N> build the play/release APK, sign it with the
+# fork's keystore (apksigner, outside Gradle) and attach it to a GitHub Release. The primary
+# host (NTFY_BASE_URL) and the canary ping key (HC_PING_KEY) are secrets too, so the public
+# tree carries nothing deployment-specific.
+# Obtainium on the phone installs from these releases.
+name: release
+
+on:
+  push:
+    tags: ['v*-ankor.*']
+
+permissions:
+  contents: write
+
+env:
+  KEYSTORE_FILE: ${{ github.workspace }}/.keystores/ntfy-ankor.jks
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Check secrets
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          HC_PING_KEY: ${{ secrets.HC_PING_KEY }}
+          NTFY_BASE_URL: ${{ secrets.NTFY_BASE_URL }}
+        run: |
+          missing=0
+          for v in GOOGLE_SERVICES_JSON_B64 KEYSTORE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD NTFY_BASE_URL; do
+            if [ -z "${!v}" ]; then echo "::error::secret $v is missing"; missing=1; fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          if [ -z "$HC_PING_KEY" ]; then
+            echo "::warning::HC_PING_KEY is empty: the canary topic is DISABLED in this build (messages on it show as normal notifications)"
+          fi
+
+      - name: Write google-services.json and keystore from secrets
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
+          mkdir -p .keystores
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$KEYSTORE_FILE"
+          chmod 600 "$KEYSTORE_FILE"
+
+      - name: Build play/release (unsigned)
+        env:
+          HC_PING_KEY: ${{ secrets.HC_PING_KEY }}
+          NTFY_BASE_URL: ${{ secrets.NTFY_BASE_URL }}
+        run: ./gradlew --no-daemon assemblePlayRelease
+
+      - name: Verify the tag matches the built versionName
+        id: version
+        run: |
+          set -euo pipefail
+          apk=$(ls app/build/outputs/apk/play/release/*.apk | head -1)
+          aapt2=$(ls -d "$ANDROID_HOME"/build-tools/*/aapt2 | sort -V | tail -1)
+          version_name=$("$aapt2" dump badging "$apk" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
+          version_code=$("$aapt2" dump badging "$apk" | sed -n "s/.*versionCode='\([^']*\)'.*/\1/p")
+          tag="${GITHUB_REF_NAME}"
+          echo "apk=$apk versionName=$version_name versionCode=$version_code tag=$tag"
+          if [ "v$version_name" != "$tag" ]; then
+            echo "::error::tag $tag does not match versionName $version_name — bump ankorRelease in app/build.gradle before tagging"
+            exit 1
+          fi
+          echo "name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "unsigned=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Align and sign
+        id: sign
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          tools=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          out="ntfy-ankor-${{ steps.version.outputs.name }}.apk"
+          "$tools/zipalign" -p -f 4 "${{ steps.version.outputs.unsigned }}" aligned.apk
+          "$tools/apksigner" sign \
+            --ks "$KEYSTORE_FILE" --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:KEYSTORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --out "$out" aligned.apk
+          "$tools/apksigner" verify --print-certs "$out" | grep -i 'SHA-256' || true
+          sha256sum "$out" > "$out.sha256"
+          echo "apk=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "AnKor fork build of ntfy-android (upstream base: $(cat UPSTREAM_BASE 2>/dev/null || echo unknown)). Install via Obtainium." \
+            "${{ steps.sign.outputs.apk }}" "${{ steps.sign.outputs.apk }}.sha256"
+
+      - name: Remove secret files
+        if: always()
+        run: |
+          shred -u -n 1 app/google-services.json "$KEYSTORE_FILE" 2>/dev/null || true
