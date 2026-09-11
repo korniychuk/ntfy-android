@@ -24,6 +24,11 @@ permissions:
 
 env:
   UPSTREAM_REPO: https://github.com/binwiederhier/ntfy-android.git
+  # GITHUB_TOKEN cannot open PRs/issues on a forked repository ("Resource not accessible by
+  # integration" even with pull-requests/issues: write), so those two steps use WATCH_PAT — a
+  # fine-grained PAT scoped to this repo with Issues: write + Pull requests: write (+ Contents:
+  # read). Without the secret they fall back to GITHUB_TOKEN and fail; the branch is pushed anyway.
+  WRITE_TOKEN: ${{ secrets.WATCH_PAT || github.token }}
 
 jobs:
   watch:
@@ -119,19 +124,19 @@ jobs:
       - name: Push branch and open a PR
         if: steps.build.outputs.result == 'ok'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ env.WRITE_TOKEN }}
         run: |
           set -euo pipefail
           latest="${{ steps.versions.outputs.latest }}"
           git push --force origin "rebase/$latest"
-          gh pr create --base ankor --head "rebase/$latest" \
-            --title "rebase onto $latest" \
-            --body "$(printf 'Automated rebase of the ankor patch series onto upstream %s (was %s). Rebase was clean and assemblePlayDebug passed in the watch run.\n\nReview the fork commits, merge with fast-forward, bump ankorRelease in app/build.gradle and tag v<version>-ankor.N to release.\n\nNote: PRs opened with the workflow token do not trigger the build workflow; the build above is the check.' "$latest" "${{ steps.versions.outputs.base }}")"
+          body="$(printf 'Automated rebase of the ankor patch series onto upstream %s (was %s). Rebase was clean and assemblePlayDebug passed in the watch run.\n\nReview the fork commits, merge with fast-forward, bump ankorRelease in app/build.gradle and tag v<version>-ankor.N to release.\n\nNote: PRs opened with the workflow token do not trigger the build workflow; the build above is the check.' "$latest" "${{ steps.versions.outputs.base }}")"
+          gh api -X POST "repos/$GITHUB_REPOSITORY/pulls" -f base=ankor -f head="rebase/$latest" \
+            -f title="rebase onto $latest" -f body="$body" --jq .html_url
 
       - name: Open an issue on conflict or build failure
         if: steps.rebase.outputs.result == 'conflict' || steps.build.outputs.result == 'failed'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ env.WRITE_TOKEN }}
         run: |
           set -euo pipefail
           latest="${{ steps.versions.outputs.latest }}"
@@ -143,6 +148,4 @@ jobs:
           fi
           body=$(printf 'Upstream released %s (recorded base: %s). The automated rebase hit a %s and needs a human.\n\nRun: %s/%s/actions/runs/%s\n\n```\n%s\n```' \
             "$latest" "${{ steps.versions.outputs.base }}" "$kind" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$log")
-          # REST rather than `gh issue create`: the GraphQL createIssue mutation answers
-          # "Resource not accessible by integration" for GITHUB_TOKEN on this (forked) repo
           gh api -X POST "repos/$GITHUB_REPOSITORY/issues" -f title="rebase onto $latest: $kind" -f body="$body" --jq .html_url
