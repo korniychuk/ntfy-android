@@ -1,0 +1,142 @@
+# AnKor fork: weekly check for a newer upstream release. If one exists, try to rebase `ankor`
+# onto it on a throwaway branch and build it. Clean rebase + green build -> a PR; a conflict or
+# a build failure -> an issue with the log. The bot never pushes to `ankor` itself.
+name: upstream-watch
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      base_override:
+        description: 'Pretend the recorded base is this tag (e.g. v1.25.1) — for testing the flow'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  UPSTREAM_REPO: https://github.com/binwiederhier/ntfy-android.git
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ankor
+          fetch-depth: 0
+
+      - name: Resolve recorded base and latest upstream release
+        id: versions
+        run: |
+          set -euo pipefail
+          base="${{ github.event.inputs.base_override }}"
+          [ -n "$base" ] || base=$(tr -d '[:space:]' < UPSTREAM_BASE)
+          latest=$(git ls-remote --tags --refs "$UPSTREAM_REPO" \
+            | sed -n 's#.*refs/tags/\(v[0-9]\+\.[0-9]\+\.[0-9]\+\)$#\1#p' | sort -V | tail -1)
+          echo "base=$base latest=$latest"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+          if [ "$(printf '%s\n%s\n' "$base" "$latest" | sort -V | tail -1)" = "$base" ]; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip if already handled
+        id: dedup
+        if: steps.versions.outputs.up_to_date == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest="${{ steps.versions.outputs.latest }}"
+          open_pr=$(gh pr list --state open --search "\"rebase onto $latest\" in:title" --json number --jq 'length')
+          open_issue=$(gh issue list --state open --search "\"rebase onto $latest\" in:title" --json number --jq 'length')
+          if [ "$open_pr" != "0" ] || [ "$open_issue" != "0" ]; then
+            echo "A PR or issue for $latest is already open; nothing to do"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        if: steps.versions.outputs.up_to_date == 'false' && steps.dedup.outputs.skip == 'false'
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: steps.versions.outputs.up_to_date == 'false' && steps.dedup.outputs.skip == 'false'
+
+      - name: Rebase ankor onto the new upstream tag
+        id: rebase
+        if: steps.versions.outputs.up_to_date == 'false' && steps.dedup.outputs.skip == 'false'
+        run: |
+          set -uo pipefail
+          latest="${{ steps.versions.outputs.latest }}"
+          base="${{ steps.versions.outputs.base }}"
+          git config user.name "upstream-watch[bot]"
+          git config user.email "upstream-watch@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "refs/tags/$base:refs/tags/$base" "refs/tags/$latest:refs/tags/$latest"
+          git checkout -B "rebase/$latest" ankor
+          if git rebase --onto "$latest" "$base" "rebase/$latest" > rebase.log 2>&1; then
+            printf '%s\n' "$latest" > UPSTREAM_BASE
+            git commit -qm "chore: rebase onto $latest" -- UPSTREAM_BASE
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U >> rebase.log || true
+            git rebase --abort || true
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+          cat rebase.log
+
+      - name: Build the rebased branch
+        id: build
+        if: steps.rebase.outputs.result == 'clean'
+        env:
+          GOOGLE_SERVICES_JSON_B64: ${{ secrets.GOOGLE_SERVICES_JSON_B64 }}
+        run: |
+          set -uo pipefail
+          printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 -d > app/google-services.json
+          if ./gradlew --no-daemon assemblePlayDebug > build.log 2>&1; then
+            echo "result=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+          fi
+          shred -u -n 1 app/google-services.json 2>/dev/null || true
+          tail -50 build.log
+
+      - name: Push branch and open a PR
+        if: steps.build.outputs.result == 'ok'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest="${{ steps.versions.outputs.latest }}"
+          git push --force origin "rebase/$latest"
+          gh pr create --base ankor --head "rebase/$latest" \
+            --title "rebase onto $latest" \
+            --body "$(printf 'Automated rebase of the ankor patch series onto upstream %s (was %s). Rebase was clean and assemblePlayDebug passed in the watch run.\n\nReview the fork commits, merge with fast-forward, bump ankorRelease in app/build.gradle and tag v<version>-ankor.N to release.\n\nNote: PRs opened with the workflow token do not trigger the build workflow; the build above is the check.' "$latest" "${{ steps.versions.outputs.base }}")"
+
+      - name: Open an issue on conflict or build failure
+        if: steps.rebase.outputs.result == 'conflict' || steps.build.outputs.result == 'failed'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest="${{ steps.versions.outputs.latest }}"
+          if [ "${{ steps.rebase.outputs.result }}" = "conflict" ]; then
+            kind="rebase conflict"; log=$(tail -80 rebase.log)
+          else
+            kind="build failure"; log=$(tail -80 build.log)
+            git push --force origin "rebase/$latest" || true
+          fi
+          gh issue create --title "rebase onto $latest: $kind" \
+            --body "$(printf 'Upstream released %s (recorded base: %s). The automated rebase hit a %s and needs a human.\n\nRun: %s/%s/actions/runs/%s\n\n```\n%s\n```' \
+              "$latest" "${{ steps.versions.outputs.base }}" "$kind" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$log")"
