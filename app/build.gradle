@@ -157,3 +157,8 @@ def ankorRelease = 4
 android.defaultConfig.applicationId = "pro.korniychuk.ntfy"
 android.defaultConfig.versionName = "${android.defaultConfig.versionName}-ankor.${ankorRelease}"
 android.defaultConfig.versionCode = android.defaultConfig.versionCode * 100 + ankorRelease
+// Primary host (the one string the Firebase code keys off; upstream keeps it in values.xml).
+// Injected at build time from NTFY_BASE_URL so the source carries no deployment-specific URL;
+// without it the build behaves exactly like upstream (ntfy.sh). Must match google-services.json.
+android.buildFeatures.resValues = true
+android.defaultConfig.resValue 'string', 'app_base_url', System.getenv('NTFY_BASE_URL') ?: 'https://ntfy.sh'
